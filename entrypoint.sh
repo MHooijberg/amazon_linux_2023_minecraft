@@ -1,24 +1,16 @@
 #!/bin/bash
 # A script to automate the deployment of the AddSite CMS Application
 
-# TODO: Create system service to start minecraft after boot
-# TODO: Create safe way to close minecraft.
-# TODO: Create screen session to reattach to minecraft application and send command programmatically.
-# TODO: Auto attach to storage volume.
 # TODO: Setup spot instances.
-
-# START_COMMAND="java -Duser.language=en_US -XX:+UnlockExperimentalVMOptions -XX:+UseContainerSupport -XX:MaxRAMPercentage=100.0 -XX:+UseG1GC -jar ${DIR_SERVER_BASE}/server.jar nogui";
-
-# TODO: Added temporarily:
-sudo mkdir /mnt/server;
 
 export TYPE_PROJECT="paper";
 export VERSION_MINECRAFT="1.21.4";
 export TERM=xterm-256color;
 export DIR_SERVER_BASE="/mnt/server";
-export START_COMMAND_BASE="/usr/bin/java -Duser.language=en_US -Xmx1300M -Xms1300M -jar /mnt/server/server.jar nogui";
+export START_COMMAND_BASE="/usr/bin/java -Duser.language=en_US -Xmx1300M -Xms1300M -jar $DIR_SERVER_BASE/server.jar nogui";
 export START_COMMAND="/usr/bin/screen -dmS minecraft ${START_COMMAND_BASE}";
-STOP_COMMAND="/usr/bin/screen -S minecraft -X stuff 'stop$(printf \"\\r\")'";
+export STOP_COMMAND="/usr/bin/screen -S minecraft -X stuff 'stop$(printf \"\\r\")'";
+export MOUNT_DEVICE="/dev/xvdbs";
 
 # Update the packages, and clean dnf to keep image small.
 echo "Updating, installing software, and cleaning up dnf...";
@@ -31,8 +23,50 @@ dnf upgrade -y && \
 echo "Adding 'app-data' user.";
 adduser -M --shell "/sbin/nologin" app-data;
 
-# TODO: Temproarily added the following:
-chown -R app-data:app-data /mnt/server;
+
+####################
+# Setup and Auto mount EBS Volume #
+####################
+# Get the real device behind $MOUNT_DEVICE
+DEVICE=$(readlink -f $MOUNT_DEVICE)
+
+if [[ -z "$DEVICE" ]]; then
+    echo "Error: $MOUNT_DEVICE does not exist or is not a symlink."
+    exit 1
+fi
+
+echo "Detected device: $DEVICE"
+
+# Check if the device already has a filesystem
+if blkid -p "$DEVICE"; then
+    echo "Filesystem already exists on $DEVICE. Skipping formatting."
+else
+    echo "No filesystem detected on $DEVICE. Formatting as xfs..."
+    sudo mkfs -t xfs "$DEVICE"
+fi
+
+# Ensure the mount directory exists
+sudo mkdir -p $DIR_SERVER_BASE
+
+# Mount the device
+echo "Mounting $DEVICE to $DIR_SERVER_BASE..."
+sudo mount "$DEVICE" $DIR_SERVER_BASE
+
+# Get UUID of the device
+UUID=$(blkid -s UUID -o value "$DEVICE")
+
+if ! findmnt --fstab --target "$MOUNT_POINT" > /dev/null; then
+    # If the mount point does not exist, add the entry
+    echo "UUID=$UUID $MOUNT_POINT ext4 defaults,nofail 0 2" | sudo tee -a /etc/fstab
+    echo "Added new entry to /etc/fstab"
+elif findmnt --fstab --target "$MOUNT_POINT" > /dev/null && ! grep -q "$UUID" /etc/fstab; then
+    # If the mount point exists but the UUID doesn't match, replace the entry
+    sudo sed -i "\|$MOUNT_POINT|s|UUID=[a-zA-Z0-9-]*|UUID=$UUID|" /etc/fstab
+    echo "Updated existing $MOUNT_POINT entry in /etc/fstab with correct UUID."
+else
+    echo "$MOUNT_POINT is already correctly configured in /etc/fstab."
+fi
+
 
 # Check if the Minecraft server was setup already.
 NO_JAR_FILE=$([ ! -f "${DIR_SERVER_BASE}/server.jar" ] && echo true || echo false);
@@ -70,7 +104,7 @@ if $NO_JAR_FILE; then
 
     # First run to populate the server folder
     echo "First boot to setup files...";
-    cd /mnt/server
+    cd $DIR_SERVER_BASE
     $START_COMMAND_BASE
 
     # Accept nececarry files
@@ -96,21 +130,23 @@ fi
 
 # Ensure correct permissions:
 echo "Updating server file ownership...";
-chown -R app-data:app-data /mnt/server;
+chown -R app-data:app-data $DIR_SERVER_BASE;
 
 # Create SystemD Script to run Minecraft server jar on reboot.
 echo "Creating new SystemD service: minecraft.service...";
 tee /etc/systemd/system/minecraft.service >/dev/null <<EOF
 [Unit]
-Description=Minecraft Server Service, used to start a minecraft server in /mnt/server on bootup.
+Description=Minecraft Server Service, used to start a minecraft server in $DIR_SERVER_BASE on bootup.
 Wants=network-online.target
-After=network-online.target
+After=network-online.target mnt-server.mount
+Requires=mnt-server.mount
 
 [Service]
 User=app-data
-WorkingDirectory=/mnt/server
-ExecStart=/usr/bin/screen -dmS minecraft /usr/bin/java -Duser.language=en_US -Xmx1300M -Xms1300M -jar /mnt/server/server.jar nogui
-ExecStop=/usr/bin/screen -S minecraft -X stuff "stop$(printf '\r')"
+WorkingDirectory=$DIR_SERVER_BASE
+ExecStartPre=/bin/sh -c '[ -d $DIR_SERVER_BASE ] && mountpoint -q $DIR_SERVER_BASE'
+ExecStart=/usr/bin/screen -dmS minecraft /usr/bin/java -Duser.language=en_US -Xmx1300M -Xms1300M -jar $DIR_SERVER_BASE/server.jar nogui
+ExecStop=/usr/bin/screen -S minecraft -X stuff 'stop^M'
 Restart=on-failure
 TimeoutStopSec=80
 StandardOutput=append:/var/log/minecraft.log
