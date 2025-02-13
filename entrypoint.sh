@@ -1,6 +1,7 @@
 #!/bin/bash
 # A script to automate the deployment of the AddSite CMS Application
 
+# TODO: Find and attach volume to current ec2 instance.
 # TODO: Setup spot instances.
 
 export TYPE_PROJECT="paper";
@@ -53,7 +54,7 @@ echo "Mounting $DEVICE to $DIR_SERVER_BASE..."
 sudo mount "$DEVICE" $DIR_SERVER_BASE
 
 # Get UUID of the device
-UUID=$(blkid -s UUID -o value "$DEVICE")
+UUID=$(sudo blkid -s UUID -o value "$DEVICE")
 
 if ! findmnt --fstab --target "$MOUNT_POINT" > /dev/null; then
     # If the mount point does not exist, add the entry
@@ -61,6 +62,7 @@ if ! findmnt --fstab --target "$MOUNT_POINT" > /dev/null; then
     echo "Added new entry to /etc/fstab"
 elif findmnt --fstab --target "$MOUNT_POINT" > /dev/null && ! grep -q "$UUID" /etc/fstab; then
     # If the mount point exists but the UUID doesn't match, replace the entry
+    # TODO: Fix issue where error was put: sed: -e expression #1, char 0: no previous regular expression
     sudo sed -i "\|$MOUNT_POINT|s|UUID=[a-zA-Z0-9-]*|UUID=$UUID|" /etc/fstab
     echo "Updated existing $MOUNT_POINT entry in /etc/fstab with correct UUID."
 else
