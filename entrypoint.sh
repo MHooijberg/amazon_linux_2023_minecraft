@@ -11,7 +11,6 @@
 
 # TODO: Added temporarily:
 sudo mkdir /mnt/server;
-chown -R app-data:app-data /mnt/server;
 
 export TYPE_PROJECT="paper";
 export VERSION_MINECRAFT="1.21.4";
@@ -19,7 +18,7 @@ export TERM=xterm-256color;
 export DIR_SERVER_BASE="/mnt/server";
 export START_COMMAND_BASE="/usr/bin/java -Duser.language=en_US -Xmx1300M -Xms1300M -jar /mnt/server/server.jar nogui";
 export START_COMMAND="/usr/bin/screen -dmS minecraft ${START_COMMAND_BASE}";
-STOP_COMMAND="/usr/bin/screen -S minecraft -X stuff 'stop$(printf \"\r\")'";
+STOP_COMMAND="/usr/bin/screen -S minecraft -X stuff 'stop$(printf \"\\r\")'";
 
 # Update the packages, and clean dnf to keep image small.
 echo "Updating, installing software, and cleaning up dnf...";
@@ -103,19 +102,20 @@ chown -R app-data:app-data /mnt/server;
 echo "Creating new SystemD service: minecraft.service...";
 tee /etc/systemd/system/minecraft.service >/dev/null <<EOF
 [Unit]
-Description=Minecraft Server on startup
+Description=Minecraft Server Service, used to start a minecraft server in /mnt/server on bootup.
 Wants=network-online.target
 After=network-online.target
 
 [Service]
 User=app-data
 WorkingDirectory=/mnt/server
-ExecStart=${START_COMMAND}
-ExecStop=${STOP_COMMAND}
+ExecStart=/usr/bin/screen -dmS minecraft /usr/bin/java -Duser.language=en_US -Xmx1300M -Xms1300M -jar /mnt/server/server.jar nogui
+ExecStop=/usr/bin/screen -S minecraft -X stuff "stop$(printf '\r')"
 Restart=on-failure
-TimeoutStopSec=60
+TimeoutStopSec=80
 StandardOutput=append:/var/log/minecraft.log
 StandardError=append:/var/log/minecraft.log
+Type=forking
 
 [Install]
 WantedBy=multi-user.target
